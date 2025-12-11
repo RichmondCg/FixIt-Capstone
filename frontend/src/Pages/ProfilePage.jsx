@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
-import { Clock, MapPin, Briefcase, X, Tag, Pencil } from "lucide-react";
+import {
+  MapPin,
+  Briefcase,
+  X,
+  Pencil,
+  ShieldCheck,
+  ShieldAlert,
+  FileWarning,
+} from "lucide-react";
 import { getProfile } from "../api/profile";
 import {
   uploadProfilePicture,
@@ -21,6 +29,7 @@ import AddEducation from "../components/AddEducation";
 import BiographyModal from "../components/BiographyModal";
 import DeleteConfirmModal from "../components/DeleteConfirmModal";
 import AddressInput from "../components/AddressInput";
+import IDSetup from "../components/IDSetup";
 
 const formatAddress = (address) => {
   if (!address || typeof address !== "object") return "Unknown";
@@ -28,6 +37,91 @@ const formatAddress = (address) => {
     Boolean
   );
   return parts.length ? parts.join(", ") : "Unknown";
+};
+
+const normalizeStatus = (status) =>
+  String(status || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
+const formatStatusText = (status) => {
+  if (!status) return "Not provided";
+  return String(status)
+    .replace(/_/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+};
+
+const hasIdentityDocuments = (entity = {}) =>
+  Boolean(
+    entity.hasIdDocuments || (entity.idPictureId && entity.selfiePictureId)
+  );
+
+const deriveVerificationMeta = (entity = {}) => {
+  const normalizedStatus = normalizeStatus(entity.verificationStatus);
+  const hasDocs = hasIdentityDocuments(entity);
+  const manualApproval = Boolean(entity.isVerified ?? entity.profile?.isVerified);
+  const ApprovedStatuses = new Set(["approved", "verified", "auto_verified"]);
+  const PendingStatuses = new Set([
+    "pending",
+    "submitted",
+    "processing",
+    "in_review",
+    "under_review",
+    "review",
+  ]);
+  const RejectedStatuses = new Set([
+    "rejected",
+    "declined",
+    "failed",
+    "needs_resubmission",
+  ]);
+
+  if (manualApproval || (hasDocs && ApprovedStatuses.has(normalizedStatus))) {
+    return {
+      label: "Verified",
+      badgeClass:
+        "bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200",
+      helperText: formatStatusText(entity.verificationStatus),
+      icon: ShieldCheck,
+    };
+  }
+
+  if (!hasDocs) {
+    return {
+      label: "Upload required",
+      badgeClass: "bg-amber-50 text-amber-700 ring-1 ring-amber-200",
+      helperText: "Submit a valid ID and selfie to begin verification",
+      icon: FileWarning,
+    };
+  }
+
+  if (PendingStatuses.has(normalizedStatus)) {
+    return {
+      label: "Pending review",
+      badgeClass: "bg-blue-50 text-blue-700 ring-1 ring-blue-200",
+      helperText: formatStatusText(entity.verificationStatus),
+      icon: ShieldAlert,
+    };
+  }
+
+  if (RejectedStatuses.has(normalizedStatus)) {
+    return {
+      label: "Action required",
+      badgeClass: "bg-red-50 text-red-700 ring-1 ring-red-200",
+      helperText: formatStatusText(entity.verificationStatus),
+      icon: ShieldAlert,
+    };
+  }
+
+  return {
+    label: "Unverified",
+    badgeClass: "bg-gray-50 text-gray-600 ring-1 ring-gray-200",
+    helperText: formatStatusText(entity.verificationStatus),
+    icon: ShieldAlert,
+  };
 };
 
 const ProfilePage = () => {
@@ -53,6 +147,7 @@ const ProfilePage = () => {
   const [isEditMode, setIsEditMode] = useState(false);
 
   const [isBioModalOpen, setIsBioModalOpen] = useState(false);
+  const [showIdSetup, setShowIdSetup] = useState(false);
 
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [deleteAction, setDeleteAction] = useState(null);
@@ -156,6 +251,15 @@ const ProfilePage = () => {
       setIsBioModalOpen(false);
     } catch (err) {
       console.error("Failed to update biography:", err);
+    }
+  };
+
+  const handleVerificationStatusChange = async () => {
+    try {
+      const res = await getProfile();
+      setCurrentUser(res.data.data);
+    } catch (err) {
+      console.error("Failed to refresh verification status:", err);
     }
   };
 
@@ -390,6 +494,11 @@ const ProfilePage = () => {
   }
 
   const { userType, fullName, image, address, biography } = currentUser;
+  const verificationMeta = deriveVerificationMeta(currentUser);
+  const VerificationIcon = verificationMeta.icon;
+  const isClient = userType === "client";
+  const needsClientVerification =
+    isClient && verificationMeta.label !== "Verified";
 
   return (
     <div className="max-w-6xl mx-auto p-6 mt-[100px]">
@@ -423,9 +532,35 @@ const ProfilePage = () => {
           <p className="text-sm text-gray-500 flex items-center justify-center md:justify-start gap-1">
             <MapPin size={16} /> {formatAddress(address)}
           </p>
-          <span className="text-xs px-2 py-1 rounded-md bg-[#55B2F3]/90 text-white mt-2 inline-block">
-            {userType === "client" ? "Client" : "Worker"}
-          </span>
+          <div className="flex flex-wrap items-center justify-center md:justify-start gap-2 mt-2">
+            <span className="text-xs px-2 py-1 rounded-md bg-[#55B2F3]/90 text-white inline-flex items-center gap-1">
+              {userType === "client" ? "Client" : "Worker"}
+            </span>
+            {VerificationIcon && (
+              needsClientVerification ? (
+                <button
+                  type="button"
+                  onClick={() => setShowIdSetup(true)}
+                  className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold ${verificationMeta.badgeClass} border border-transparent hover:ring-2 hover:ring-blue-100 transition-colors cursor-pointer`}
+                >
+                  <VerificationIcon className="w-3 h-3" />
+                  Verify identity
+                </button>
+              ) : (
+                <span
+                  className={`inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-semibold ${verificationMeta.badgeClass}`}
+                >
+                  <VerificationIcon className="w-3 h-3" />
+                  {verificationMeta.label}
+                </span>
+              )
+            )}
+          </div>
+          {needsClientVerification && (
+            <p className="text-xs text-amber-600 mt-1">
+              {verificationMeta.helperText}
+            </p>
+          )}
 
           {userType === "worker" && (
             <div className="relative mt-4">
@@ -510,7 +645,7 @@ const ProfilePage = () => {
                       {post.status && (
                         <span
                           className={`px-3 py-1 rounded-full text-xs shadow-sm ${((post.status || "").toLowerCase() === "open" &&
-                              "bg-green-100 text-green-600") ||
+                            "bg-green-100 text-green-600") ||
                             ((post.status || "").toLowerCase() === "hired" &&
                               "bg-yellow-100 text-yellow-700") ||
                             ((post.status || "").toLowerCase() ===
@@ -626,8 +761,8 @@ const ProfilePage = () => {
                     onClick={() => setIsDeleteConfirmOpen(false)}
                     disabled={isJobDeleting}
                     className={`px-4 py-2 ${isJobDeleting
-                        ? "text-gray-300 cursor-not-allowed"
-                        : "text-gray-500 hover:text-gray-700"
+                      ? "text-gray-300 cursor-not-allowed"
+                      : "text-gray-500 hover:text-gray-700"
                       }`}
                   >
                     Cancel
@@ -636,8 +771,8 @@ const ProfilePage = () => {
                     onClick={handleDeleteJob}
                     disabled={isJobDeleting}
                     className={`px-4 py-2 rounded-lg ${isJobDeleting
-                        ? "bg-red-300 cursor-not-allowed"
-                        : "bg-red-500 hover:bg-red-600"
+                      ? "bg-red-300 cursor-not-allowed"
+                      : "bg-red-500 hover:bg-red-600"
                       } text-white`}
                   >
                     {isJobDeleting ? "Deleting..." : "Delete"}
@@ -663,8 +798,8 @@ const ProfilePage = () => {
                     onClick={() => setIsUpdateConfirmOpen(false)}
                     disabled={isJobUpdating}
                     className={`px-4 py-2 ${isJobUpdating
-                        ? "text-gray-300 cursor-not-allowed"
-                        : "text-gray-500 hover:text-gray-700"
+                      ? "text-gray-300 cursor-not-allowed"
+                      : "text-gray-500 hover:text-gray-700"
                       }`}
                   >
                     Cancel
@@ -673,8 +808,8 @@ const ProfilePage = () => {
                     onClick={handleUpdateJob}
                     disabled={isJobUpdating}
                     className={`px-4 py-2 rounded-lg ${isJobUpdating
-                        ? "bg-blue-300 cursor-not-allowed"
-                        : "bg-blue-500 hover:bg-blue-600"
+                      ? "bg-blue-300 cursor-not-allowed"
+                      : "bg-blue-500 hover:bg-blue-600"
                       } text-white`}
                   >
                     {isJobUpdating ? "Saving..." : "Confirm"}
@@ -682,6 +817,13 @@ const ProfilePage = () => {
                 </div>
               </div>
             </div>
+          )}
+
+          {showIdSetup && (
+            <IDSetup
+              onClose={() => setShowIdSetup(false)}
+              onStatusChange={handleVerificationStatusChange}
+            />
           )}
         </>
       ) : (
@@ -1093,7 +1235,7 @@ const ProfilePage = () => {
 
       {/* Modal for profile picture */}
       {isModalOpen && (
-  <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[2000]">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-[2000]">
           <div className="bg-white rounded-2xl p-6 w-96 relative shadow-lg">
             <button
               className="absolute top-2 right-2 text-gray-400 hover:text-gray-600 cursor-pointer"
